@@ -32,4 +32,9 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/clinics", clinicRoutes);
 app.use("/api/v1/bookings", bookingRoutes);
 
+if (process.env.NODE_ENV !== "production") {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+}
+
 export default app;
