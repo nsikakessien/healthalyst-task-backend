@@ -1,0 +1,119 @@
+import { Response } from "express";
+import { prisma } from "../utils/prisma";
+import { AuthenticatedRequest } from "../middleware/authAndTenant";
+
+const HOLD_TIME_MINUTES = 5;
+
+export const holdSlot = async (req: AuthenticatedRequest, res: Response) => {
+  const { slotId } = req.params;
+  const userId = req.user!.id;
+  const clinicId = req.tenantId!;
+
+  try {
+    const slot = await prisma.$transaction(async (tx) => {
+      const target = await tx.appointmentSlot.findFirst({
+        where: { id: slotId, clinicId },
+      });
+
+      if (!target) throw new Error("Slot not found in this clinic context.");
+      if (target.isBooked) throw new Error("Slot has already been booked.");
+
+      const now = new Date();
+      if (
+        target.lockedUntil &&
+        target.lockedUntil > now &&
+        target.lockedBy !== userId
+      ) {
+        throw new Error("Slot is currently on hold by another patient.");
+      }
+
+      const lockedUntil = new Date(
+        now.getTime() + HOLD_TIME_MINUTES * 60 * 1000,
+      );
+
+      return await tx.appointmentSlot.update({
+        where: { id: slotId },
+        data: { lockedBy: userId, lockedUntil },
+      });
+    });
+
+    return res
+      .status(200)
+      .json({ message: "Slot reserved on 5-minute lock", slot });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+};
+
+export const createBooking = async (
+  req: AuthenticatedRequest,
+  res: Response,
+) => {
+  const { slotId } = req.body;
+  const userId = req.user!.id;
+  const clinicId = req.tenantId!;
+
+  try {
+    const booking = await prisma.$transaction(async (tx) => {
+      const slot = await tx.appointmentSlot.findFirst({
+        where: { id: slotId, clinicId },
+      });
+
+      if (!slot) throw new Error("Slot not found or tenant mismatch.");
+      if (slot.isBooked) throw new Error("Slot has already been confirmed.");
+
+      const now = new Date();
+      if (
+        slot.lockedBy &&
+        slot.lockedBy !== userId &&
+        slot.lockedUntil &&
+        slot.lockedUntil > now
+      ) {
+        throw new Error("Reservation lock belongs to another user.");
+      }
+
+      await tx.appointmentSlot.update({
+        where: { id: slotId },
+        data: { isBooked: true, lockedBy: null, lockedUntil: null },
+      });
+
+      return await tx.booking.create({
+        data: {
+          clinicId,
+          patientId: userId,
+          slotId,
+          status: "CONFIRMED",
+        },
+        include: { slot: true, clinic: true },
+      });
+    });
+
+    return res.status(201).json(booking);
+  } catch (error: any) {
+    return res.status(409).json({ error: error.message });
+  }
+};
+
+export const getAdminBookings = async (
+  req: AuthenticatedRequest,
+  res: Response,
+) => {
+  const clinicId = req.tenantId!;
+
+  if (req.user?.role !== "ADMIN") {
+    return res
+      .status(403)
+      .json({ error: "Access denied. Clinic Admin access only." });
+  }
+
+  const bookings = await prisma.booking.findMany({
+    where: { clinicId },
+    include: {
+      patient: { select: { id: true, name: true, email: true } },
+      slot: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return res.status(200).json(bookings);
+};
