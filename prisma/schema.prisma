@@ -56,15 +56,18 @@ model AppointmentSlot {
 }
 
 model Booking {
-  id        String          @id @default(uuid())
-  clinicId  String
-  clinic    Clinic          @relation(fields: [clinicId], references: [id])
-  patientId String
-  patient   User            @relation(fields: [patientId], references: [id])
-  slotId    String          @unique
-  slot      AppointmentSlot @relation(fields: [slotId], references: [id])
-  status    BookingStatus   @default(CONFIRMED)
-  createdAt DateTime        @default(now())
+  id                 String          @id @default(uuid())
+  clinicId           String
+  clinic             Clinic          @relation(fields: [clinicId], references: [id])
+  patientId          String
+  patient            User            @relation(fields: [patientId], references: [id])
+  patientPhone       String?
+  patientDateOfBirth DateTime?
+  patientReason      String?
+  slotId             String          @unique
+  slot               AppointmentSlot @relation(fields: [slotId], references: [id])
+  status             BookingStatus   @default(CONFIRMED)
+  createdAt          DateTime        @default(now())
 
   @@index([clinicId, status])
 }

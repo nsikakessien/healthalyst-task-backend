@@ -1,6 +1,7 @@
 import { Response } from "express";
 import { prisma } from "../utils/prisma";
 import { AuthenticatedRequest } from "../middleware/authAndTenant";
+import { emitBookingCreated } from "../utils/realtime";
 
 const HOLD_TIME_MINUTES = 5;
 
@@ -49,9 +50,23 @@ export const createBooking = async (
   req: AuthenticatedRequest,
   res: Response,
 ) => {
-  const { slotId } = req.body;
+  const { slotId, patientPhone, patientDateOfBirth, patientReason } = req.body;
   const userId = req.user!.id;
   const clinicId = req.tenantId!;
+
+  if (!patientPhone || !patientDateOfBirth || !patientReason?.trim()) {
+    return res.status(400).json({
+      error:
+        "Phone number, date of birth, and appointment reason are required.",
+    });
+  }
+
+  const dateOfBirth = new Date(patientDateOfBirth);
+  if (Number.isNaN(dateOfBirth.getTime())) {
+    return res
+      .status(400)
+      .json({ error: "A valid date of birth is required." });
+  }
 
   try {
     const booking = await prisma.$transaction(async (tx) => {
@@ -81,12 +96,21 @@ export const createBooking = async (
         data: {
           clinicId,
           patientId: userId,
+          patientPhone,
+          patientDateOfBirth: dateOfBirth,
+          patientReason: patientReason.trim(),
           slotId,
           status: "CONFIRMED",
         },
-        include: { slot: true, clinic: true },
+        include: {
+          patient: { select: { id: true, name: true, email: true } },
+          slot: true,
+          clinic: true,
+        },
       });
     });
+
+    emitBookingCreated(clinicId, booking);
 
     return res.status(201).json(booking);
   } catch (error: any) {
@@ -98,9 +122,9 @@ export const getAdminBookings = async (
   req: AuthenticatedRequest,
   res: Response,
 ) => {
-  const clinicId = req.tenantId!;
+  const clinicId = req.user?.clinicId;
 
-  if (req.user?.role !== "ADMIN") {
+  if (!clinicId || req.user?.role !== "ADMIN") {
     return res
       .status(403)
       .json({ error: "Access denied. Clinic Admin access only." });

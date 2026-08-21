@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { prisma } from "../utils/prisma";
 
 export const login = async (req: Request, res: Response) => {
-  const { email, password } = req.body;
+  const { email, password, portal } = req.body;
 
   try {
     const user = await prisma.user.findUnique({ where: { email } });
@@ -13,6 +13,19 @@ export const login = async (req: Request, res: Response) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch)
       return res.status(401).json({ error: "Invalid credentials." });
+
+    if (portal === "admin" && user.role !== "ADMIN") {
+      return res
+        .status(403)
+        .json({
+          error: "Only clinic administrators can use the admin portal.",
+        });
+    }
+    if (portal === "patient" && user.role !== "PATIENT") {
+      return res
+        .status(403)
+        .json({ error: "Only patients can use the patient portal." });
+    }
 
     const token = jwt.sign(
       {
@@ -28,7 +41,7 @@ export const login = async (req: Request, res: Response) => {
     // Attach JWT to HTTP-Only Cookie
     res.cookie("jwt_token", token, {
       httpOnly: true,
-      secure: process.env.NODE_NODE_ENV === "production",
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       maxAge: 24 * 60 * 60 * 1000, // 1 day
       path: "/",

@@ -12,11 +12,15 @@ export const authenticateJWT = (
   next: NextFunction,
 ) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
+  const cookieToken = req.cookies?.jwt_token;
+  const token = authHeader?.startsWith("Bearer ")
+    ? authHeader.split(" ")[1]
+    : cookieToken;
+
+  if (!token) {
     return res.status(401).json({ error: "Authentication token required." });
   }
 
-  const token = authHeader.split(" ")[1];
   try {
     const payload = jwt.verify(
       token,
@@ -36,12 +40,36 @@ export const requireTenant = (
   res: Response,
   next: NextFunction,
 ) => {
-  const tenantId = (req.headers["x-clinic-id"] as string) || req.user?.clinicId;
+  const requestedTenantId = req.headers["x-clinic-id"] as string | undefined;
+  const tenantId =
+    req.user?.role === "ADMIN"
+      ? req.user.clinicId
+      : requestedTenantId || req.user?.clinicId;
   if (!tenantId) {
     return res
       .status(400)
       .json({ error: "Missing tenant context in x-clinic-id header." });
   }
+  if (
+    req.user?.role === "ADMIN" &&
+    requestedTenantId &&
+    requestedTenantId !== tenantId
+  ) {
+    return res
+      .status(403)
+      .json({ error: "You can only access your assigned clinic." });
+  }
   req.tenantId = tenantId;
   next();
 };
+
+export const requireRole =
+  (...roles: string[]) =>
+  (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return res
+        .status(403)
+        .json({ error: "You are not authorized for this operation." });
+    }
+    next();
+  };
