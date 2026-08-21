@@ -9,6 +9,10 @@ interface BookingEmail {
   reason: string;
 }
 
+interface AppointmentStatusEmail extends BookingEmail {
+  status: "CONFIRMED" | "CANCELLED";
+}
+
 const getTransporter = () => {
   const host =
     process.env.SMTP_HOST ||
@@ -54,6 +58,47 @@ export const sendBookingConfirmation = async (booking: BookingEmail) => {
       `Reason: ${booking.reason}`,
       "",
       "Please arrive a few minutes early.",
+    ].join("\n"),
+  });
+  return true;
+};
+
+export const sendAppointmentStatusEmail = async (
+  appointment: AppointmentStatusEmail,
+) => {
+  const transporter = getTransporter();
+  const from =
+    process.env.SMTP_FROM ||
+    (process.env.NODE_ENV !== "production"
+      ? "PulseBook <appointments@localhost>"
+      : "");
+  if (!transporter || !from) {
+    console.warn(
+      "Appointment status email skipped: SMTP configuration is incomplete.",
+    );
+    return false;
+  }
+
+  const accepted = appointment.status === "CONFIRMED";
+  await transporter.sendMail({
+    from,
+    to: appointment.patientEmail,
+    subject: accepted
+      ? `Appointment accepted by ${appointment.clinicName}`
+      : `Appointment rejected by ${appointment.clinicName}`,
+    text: [
+      `Hello ${appointment.patientName},`,
+      "",
+      accepted
+        ? "Your appointment request has been accepted by the clinic."
+        : "Your appointment request has been rejected by the clinic.",
+      `Clinic: ${appointment.clinicName}`,
+      `Date and time: ${appointment.startTime.toLocaleString()}`,
+      `Reason: ${appointment.reason}`,
+      "",
+      accepted
+        ? "Please arrive a few minutes early."
+        : "Please return to the patient portal to choose another available slot.",
     ].join("\n"),
   });
   return true;

@@ -2,7 +2,10 @@ import { Response } from "express";
 import { prisma } from "../utils/prisma";
 import { AuthenticatedRequest } from "../middleware/authAndTenant";
 import { emitBookingCreated } from "../utils/realtime";
-import { sendBookingConfirmation } from "../utils/mailer";
+import {
+  sendAppointmentStatusEmail,
+  sendBookingConfirmation,
+} from "../utils/mailer";
 
 const HOLD_TIME_MINUTES = 5;
 
@@ -248,6 +251,7 @@ export const updateBookingStatus = async (
           data: { status, slot: { disconnect: true } },
           include: {
             patient: { select: { id: true, name: true, email: true } },
+            clinic: true,
             slot: true,
           },
         });
@@ -258,12 +262,29 @@ export const updateBookingStatus = async (
         data: { status },
         include: {
           patient: { select: { id: true, name: true, email: true } },
+          clinic: true,
           slot: true,
         },
       });
     });
 
     emitBookingCreated(clinicId, booking);
+    try {
+      await sendAppointmentStatusEmail({
+        patientName: booking.patient.name,
+        patientEmail: booking.patientEmail || booking.patient.email,
+        clinicName: booking.clinic.name,
+        startTime: booking.appointmentStart,
+        endTime: booking.appointmentEnd,
+        reason: booking.patientReason || "General consultation",
+        status,
+      });
+    } catch (emailError) {
+      console.error(
+        "Appointment status updated but notification email failed:",
+        emailError,
+      );
+    }
     return res.status(200).json(booking);
   } catch (error: any) {
     return res.status(409).json({ error: error.message });
