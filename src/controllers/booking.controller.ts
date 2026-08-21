@@ -2,6 +2,7 @@ import { Response } from "express";
 import { prisma } from "../utils/prisma";
 import { AuthenticatedRequest } from "../middleware/authAndTenant";
 import { emitBookingCreated } from "../utils/realtime";
+import { sendBookingConfirmation } from "../utils/mailer";
 
 const HOLD_TIME_MINUTES = 5;
 
@@ -69,14 +70,32 @@ export const createBooking = async (
   req: AuthenticatedRequest,
   res: Response,
 ) => {
-  const { slotId, patientPhone, patientDateOfBirth, patientReason } = req.body;
+  const {
+    slotId,
+    patientEmail,
+    patientPhone,
+    patientDateOfBirth,
+    patientReason,
+  } = req.body;
   const userId = req.user!.id;
   const clinicId = req.tenantId!;
 
-  if (!patientPhone || !patientDateOfBirth || !patientReason?.trim()) {
+  if (
+    !patientEmail ||
+    !patientPhone ||
+    !patientDateOfBirth ||
+    !patientReason?.trim()
+  ) {
     return res.status(400).json({
       error:
-        "Phone number, date of birth, and appointment reason are required.",
+        "Email, phone number, date of birth, and appointment reason are required.",
+    });
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(patientEmail.trim())) {
+    return res.status(400).json({
+      error:
+        "Please provide a valid email address for appointment notifications.",
     });
   }
 
@@ -89,37 +108,58 @@ export const createBooking = async (
 
   try {
     const booking = await prisma.$transaction(async (tx) => {
-      const slot = await tx.appointmentSlot.findFirst({
-        where: { id: slotId, clinicId },
-      });
-
-      if (!slot) throw new Error("Slot not found or tenant mismatch.");
-      if (slot.isBooked) throw new Error("Slot has already been confirmed.");
-
       const now = new Date();
-      if (
-        slot.lockedBy &&
-        slot.lockedBy !== userId &&
-        slot.lockedUntil &&
-        slot.lockedUntil > now
-      ) {
-        throw new Error("Reservation lock belongs to another user.");
-      }
-
-      await tx.appointmentSlot.update({
-        where: { id: slotId },
+      const claim = await tx.appointmentSlot.updateMany({
+        where: {
+          id: slotId,
+          clinicId,
+          isBooked: false,
+          lockedBy: userId,
+          lockedUntil: { gt: now },
+        },
         data: { isBooked: true, lockedBy: null, lockedUntil: null },
       });
+
+      if (claim.count === 0) {
+        const slot = await tx.appointmentSlot.findFirst({
+          where: { id: slotId, clinicId },
+          select: {
+            id: true,
+            isBooked: true,
+            lockedBy: true,
+            lockedUntil: true,
+          },
+        });
+        if (!slot) throw new Error("Slot not found or tenant mismatch.");
+        if (slot.isBooked) throw new Error("Slot has already been confirmed.");
+        if (slot.lockedUntil && slot.lockedUntil > now) {
+          throw new Error(
+            "You must hold this slot before confirming it, and another patient's hold cannot be used.",
+          );
+        }
+        throw new Error(
+          "This slot hold has expired. Please select the slot again.",
+        );
+      }
+
+      const slot = await tx.appointmentSlot.findUnique({
+        where: { id: slotId },
+        select: { startTime: true, endTime: true },
+      });
+      if (!slot) throw new Error("Slot not found or tenant mismatch.");
 
       return await tx.booking.create({
         data: {
           clinicId,
           patientId: userId,
+          patientEmail: patientEmail.trim().toLowerCase(),
           patientPhone,
           patientDateOfBirth: dateOfBirth,
           patientReason: patientReason.trim(),
           slotId,
-          status: "CONFIRMED",
+          appointmentStart: slot.startTime,
+          appointmentEnd: slot.endTime,
+          status: "PENDING",
         },
         include: {
           patient: { select: { id: true, name: true, email: true } },
@@ -130,8 +170,101 @@ export const createBooking = async (
     });
 
     emitBookingCreated(clinicId, booking);
+    let emailSent = false;
+    if (booking.slot) {
+      try {
+        emailSent = await sendBookingConfirmation({
+          patientName: booking.patient.name,
+          patientEmail: booking.patientEmail || booking.patient.email,
+          clinicName: booking.clinic.name,
+          startTime: booking.slot.startTime,
+          endTime: booking.slot.endTime,
+          reason: booking.patientReason || "General consultation",
+        });
+      } catch (emailError) {
+        console.error(
+          "Booking created but confirmation email failed:",
+          emailError,
+        );
+      }
+    }
 
-    return res.status(201).json(booking);
+    return res.status(201).json({ ...booking, emailSent });
+  } catch (error: any) {
+    return res.status(409).json({ error: error.message });
+  }
+};
+
+export const getPatientBookings = async (
+  req: AuthenticatedRequest,
+  res: Response,
+) => {
+  const bookings = await prisma.booking.findMany({
+    where: { patientId: req.user!.id },
+    include: { clinic: true, slot: true },
+    orderBy: { createdAt: "desc" },
+  });
+  return res.status(200).json(bookings);
+};
+
+export const updateBookingStatus = async (
+  req: AuthenticatedRequest,
+  res: Response,
+) => {
+  const { bookingId } = req.params;
+  const { status } = req.body as { status?: "CONFIRMED" | "CANCELLED" };
+  const clinicId = req.user?.clinicId;
+
+  if (!clinicId || req.user?.role !== "ADMIN") {
+    return res.status(403).json({ error: "Clinic admin access required." });
+  }
+  if (status !== "CONFIRMED" && status !== "CANCELLED") {
+    return res
+      .status(400)
+      .json({ error: "Status must be CONFIRMED or CANCELLED." });
+  }
+
+  try {
+    const booking = await prisma.$transaction(async (tx) => {
+      const existing = await tx.booking.findFirst({
+        where: { id: bookingId, clinicId },
+        include: { slot: true },
+      });
+      if (!existing) throw new Error("Appointment not found in your clinic.");
+      if (existing.status !== "PENDING")
+        throw new Error("Only pending appointments can be reviewed.");
+
+      if (
+        status === "CANCELLED" &&
+        existing.slot &&
+        existing.slot.startTime > new Date()
+      ) {
+        await tx.appointmentSlot.update({
+          where: { id: existing.slot.id },
+          data: { isBooked: false, lockedBy: null, lockedUntil: null },
+        });
+        return tx.booking.update({
+          where: { id: bookingId },
+          data: { status, slot: { disconnect: true } },
+          include: {
+            patient: { select: { id: true, name: true, email: true } },
+            slot: true,
+          },
+        });
+      }
+
+      return tx.booking.update({
+        where: { id: bookingId },
+        data: { status },
+        include: {
+          patient: { select: { id: true, name: true, email: true } },
+          slot: true,
+        },
+      });
+    });
+
+    emitBookingCreated(clinicId, booking);
+    return res.status(200).json(booking);
   } catch (error: any) {
     return res.status(409).json({ error: error.message });
   }

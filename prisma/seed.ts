@@ -74,11 +74,10 @@ async function main() {
   });
 
   const now = new Date();
-  const generateApexSlots = () => {
+  const generateSlots = (clinicId: string, appointmentTimes: number[]) => {
     const slots = [];
-    const appointmentTimes = [9, 10, 11, 14, 15, 16];
 
-    for (let day = 1; day <= 7; day += 1) {
+    for (let day = 1; day <= 30; day += 1) {
       for (const hour of appointmentTimes) {
         const startTime = new Date(now);
         startTime.setDate(now.getDate() + day);
@@ -88,32 +87,7 @@ async function main() {
         endTime.setMinutes(30);
 
         slots.push({
-          clinicId: clinicA.id,
-          startTime,
-          endTime,
-          isBooked: false,
-        });
-      }
-    }
-
-    return slots;
-  };
-
-  const generateMetroSlots = () => {
-    const slots = [];
-    const appointmentTimes = [8, 9, 10, 13, 14, 15];
-
-    for (let day = 1; day <= 7; day += 1) {
-      for (const hour of appointmentTimes) {
-        const startTime = new Date(now);
-        startTime.setDate(now.getDate() + day);
-        startTime.setHours(hour, 0, 0, 0);
-
-        const endTime = new Date(startTime);
-        endTime.setMinutes(30);
-
-        slots.push({
-          clinicId: clinicB.id,
+          clinicId,
           startTime,
           endTime,
           isBooked: false,
@@ -125,7 +99,10 @@ async function main() {
   };
 
   await prisma.appointmentSlot.createMany({
-    data: [...generateApexSlots(), ...generateMetroSlots()],
+    data: [
+      ...generateSlots(clinicA.id, [8, 9, 10, 11, 13, 14, 15, 16]),
+      ...generateSlots(clinicB.id, [8, 9, 10, 11, 13, 14, 15, 16, 17]),
+    ],
   });
 
   console.log("Database seeded successfully.");

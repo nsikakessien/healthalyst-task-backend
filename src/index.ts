@@ -49,11 +49,17 @@ io.use((socket, next) => {
   if (!token) return next(new Error("Authentication token required."));
   try {
     const user = jwt.verify(token, process.env.JWT_SECRET || "supersecret") as {
+      id?: string;
       role?: string;
       clinicId?: string;
     };
-    if (user.role !== "ADMIN" || !user.clinicId) {
-      return next(new Error("Admin access required."));
+    if (
+      !user.id ||
+      !user.role ||
+      (user.role === "ADMIN" && !user.clinicId) ||
+      !["ADMIN", "PATIENT"].includes(user.role)
+    ) {
+      return next(new Error("Authorized portal access required."));
     }
     socket.data.user = user;
     next();
@@ -63,7 +69,11 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
-  socket.join(`clinic:${socket.data.user.clinicId}`);
+  if (socket.data.user.role === "ADMIN") {
+    socket.join(`clinic:${socket.data.user.clinicId}`);
+  } else {
+    socket.join(`patient:${socket.data.user.id}`);
+  }
 });
 setSocketServer(io);
 

@@ -3,6 +3,8 @@ import {
   holdSlot,
   createBooking,
   getAdminBookings,
+  getPatientBookings,
+  updateBookingStatus,
 } from "../controllers/booking.controller";
 import {
   authenticateJWT,
@@ -27,5 +29,17 @@ router.post(
   createBooking,
 );
 router.get("/admin", authenticateJWT, requireRole("ADMIN"), getAdminBookings);
+router.get(
+  "/history",
+  authenticateJWT,
+  requireRole("PATIENT"),
+  getPatientBookings,
+);
+router.patch(
+  "/:bookingId/status",
+  authenticateJWT,
+  requireRole("ADMIN"),
+  updateBookingStatus,
+);
 
 export default router;

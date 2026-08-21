@@ -61,12 +61,15 @@ model Booking {
   clinic             Clinic          @relation(fields: [clinicId], references: [id])
   patientId          String
   patient            User            @relation(fields: [patientId], references: [id])
+  patientEmail       String?
   patientPhone       String?
   patientDateOfBirth DateTime?
   patientReason      String?
-  slotId             String          @unique
-  slot               AppointmentSlot @relation(fields: [slotId], references: [id])
-  status             BookingStatus   @default(CONFIRMED)
+  slotId             String?         @unique
+  slot               AppointmentSlot? @relation(fields: [slotId], references: [id], onDelete: SetNull)
+  appointmentStart   DateTime
+  appointmentEnd     DateTime
+  status             BookingStatus   @default(PENDING)
   createdAt          DateTime        @default(now())
 
   @@index([clinicId, status])
