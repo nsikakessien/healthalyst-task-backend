@@ -66,8 +66,33 @@ async function main() {
     }));
   };
 
+  const generateApexSlots = () => {
+    const slots = [];
+    const appointmentTimes = [9, 10, 11, 14, 15, 16];
+
+    for (let day = 1; day <= 7; day += 1) {
+      for (const hour of appointmentTimes) {
+        const startTime = new Date(now);
+        startTime.setDate(now.getDate() + day);
+        startTime.setHours(hour, 0, 0, 0);
+
+        const endTime = new Date(startTime);
+        endTime.setMinutes(30);
+
+        slots.push({
+          clinicId: clinicA.id,
+          startTime,
+          endTime,
+          isBooked: false,
+        });
+      }
+    }
+
+    return slots;
+  };
+
   await prisma.appointmentSlot.createMany({
-    data: [...generateSlots(clinicA.id), ...generateSlots(clinicB.id)],
+    data: [...generateApexSlots(), ...generateSlots(clinicB.id)],
   });
 
   console.log("Database seeded successfully.");
