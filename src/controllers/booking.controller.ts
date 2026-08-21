@@ -12,25 +12,44 @@ export const holdSlot = async (req: AuthenticatedRequest, res: Response) => {
 
   try {
     const slot = await prisma.$transaction(async (tx) => {
-      const target = await tx.appointmentSlot.findFirst({
-        where: { id: slotId, clinicId },
-      });
-
-      if (!target) throw new Error("Slot not found in this clinic context.");
-      if (target.isBooked) throw new Error("Slot has already been booked.");
-
       const now = new Date();
-      if (
-        target.lockedUntil &&
-        target.lockedUntil > now &&
-        target.lockedBy !== userId
-      ) {
-        throw new Error("Slot is currently on hold by another patient.");
-      }
-
       const lockedUntil = new Date(
         now.getTime() + HOLD_TIME_MINUTES * 60 * 1000,
       );
+
+      const claimed = await tx.appointmentSlot.updateMany({
+        where: {
+          id: slotId,
+          clinicId,
+          isBooked: false,
+          OR: [
+            { lockedUntil: null },
+            { lockedUntil: { lte: now } },
+            { lockedBy: userId },
+          ],
+        },
+        data: { lockedBy: userId, lockedUntil },
+      });
+
+      if (claimed.count === 0) {
+        const target = await tx.appointmentSlot.findFirst({
+          where: { id: slotId, clinicId },
+          select: { id: true, isBooked: true },
+        });
+        if (!target) throw new Error("Slot not found in this clinic context.");
+        if (target.isBooked) throw new Error("Slot has already been booked.");
+        throw new Error("Slot is currently on hold by another patient.");
+      }
+
+      await tx.appointmentSlot.updateMany({
+        where: {
+          lockedBy: userId,
+          lockedUntil: { gt: now },
+          isBooked: false,
+          id: { not: slotId },
+        },
+        data: { lockedBy: null, lockedUntil: null },
+      });
 
       return await tx.appointmentSlot.update({
         where: { id: slotId },
